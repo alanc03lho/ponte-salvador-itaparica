@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PONTE SALVADOR-ITAPARICA - A Travessia de Jerônimo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;display:flex;justify-content:center;align-items:center;height:100vh;font-family:'Press Start 2P',monospace}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #333}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+
+// Game dimensions
+const W=960,H=540;
+canvas.width=W;canvas.height=H;
+
+// Scale to fit
+function resize(){
+  const s=Math.min(window.innerWidth/W,window.innerHeight/H);
+  canvas.style.width=(W*s)+'px';
+  canvas.style.height=(H*s)+'px';
+}
+resize();window.addEventListener('resize',resize);
+
+// ============ ASSET LOADING ============
+const assets={};
+const toLoad=[
+  ['jero1','jero/jero1.png'],
+  ['jero2','jero/jero2.png'],
+  ['bruno','bruno/bruno.png'],
+  ['bruno2','bruno/bruno02.png'],
+  ['acm','acm/acm.png'],
+  ['acm2','acm/acm2.png'],
+  ['ponte','ponte/ponte.png'],
+  ['cone','cone/cone.png'],
+  ['caixa13','caixa13/creation_2450969944.png'],
+  ['estrela','caixa13/estrela.png'],
+  ['raio','raio/raio.png'],
+  ['balao','fala/balao-de-fala.png'],
+  ['piada','jornal/piada.png'],
+  ['cheiroMole','jornal/cheiro-mole.png'],
+  ['naoSai','jornal/nao-sai.png'],
+  ['naoTem','jornal/nao-tem-como.png'],
+  ['jeroCavalo','jero/jero-cavalo.png'],
+  ['jeroCavalo2','jero/jero-cavalo-2.png'],
+  ['jeroCavalo3','jero/jero-cavalo-3.png'],
+];
+// Add ACM transformation frames (13 selected frames from frame-acm/)
+const acmFrameNames=['frame_001','frame_006','frame_007','frame_009','frame_011',
+  'frame_023','frame_024','frame_025','frame_027','frame_029','frame_033',
+  'frame_035','frame_036'];
+acmFrameNames.forEach((name,i)=>{
+  toLoad.push(['acmFrame'+(i+1), 'acm/frame-acm/'+name+'.png']);
+});
+let loaded=0;
+let allLoaded=false;
+
+// Array for easy frame access (will hold canvases with transparent bg)
+const acmFrames=[];
+const ACM_FRAME_COUNT=acmFrameNames.length; // 13
+
+// Remove white background from a frame image → returns canvas with transparency
+function removeWhiteBg(img){
+  const c=document.createElement('canvas');
+  c.width=img.naturalWidth;c.height=img.naturalHeight;
+  const cx=c.getContext('2d');
+  cx.drawImage(img,0,0);
+  const d=cx.getImageData(0,0,c.width,c.height);
+  const px=d.data;
+  for(let i=0;i<px.length;i+=4){
+    const r=px[i],g=px[i+1],b=px[i+2];
+    if(r>240&&g>240&&b>240){
+      // Pure white → fully transparent
+      px[i+3]=0;
+    } else if(r>220&&g>220&&b>220){
+      // Near-white → fade out gradually (smooth edge)
+      px[i+3]=Math.floor((255-Math.max(r,g,b))*7);
+    }
+  }
+  cx.putImageData(d,0,0);
+  c.complete=true;
+  c.naturalWidth=c.width;
+  c.naturalHeight=c.height;
+  return c;
+}
+
+function processAcmFrames(){
+  for(let i=1;i<=ACM_FRAME_COUNT;i++){
+    const img=assets['acmFrame'+i];
+    if(img&&img.naturalWidth>0){
+      acmFrames.push(removeWhiteBg(img));
+    } else {
+      acmFrames.push(img); // fallback
+    }
+  }
+}
+
+toLoad.forEach(([name,path])=>{
+  const img=new Image();
+  img.onload=()=>{loaded++;if(loaded===toLoad.length){allLoaded=true;processAcmFrames();}};
+  img.onerror=()=>{console.warn('Failed:',path);loaded++;if(loaded===toLoad.length){allLoaded=true;processAcmFrames();}};
+  img.src=path;
+  assets[name]=img;
+});
+
+// ============ INPUT ============
+const keys={};const jp={};
+window.addEventListener('keydown',e=>{if(!keys[e.code])jp[e.code]=true;keys[e.code]=true;e.preventDefault();});
+window.addEventListener('keyup',e=>{keys[e.code]=false;e.preventDefault();});
+function isDown(c){return!!keys[c]}
+function justP(c){const v=!!jp[c];jp[c]=false;return v}
+function clearJP(){for(let k in jp)jp[k]=false}
+
+// Touch / click support for mobile
+let touchJump=false;
+canvas.addEventListener('touchstart',e=>{e.preventDefault();touchJump=true;});
+canvas.addEventListener('mousedown',e=>{touchJump=true;});
+
+// ============ AUDIO ============
+let actx=null;
+function initAudio(){if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)()}
+function tone(f,d,t='square',v=0.06){
+  if(!actx)return;const o=actx.createOscillator(),g=actx.createGain();
+  o.type=t;o.frequency.value=f;g.gain.setValueAtTime(v,actx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,actx.currentTime+d);
+  o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+d);
+}
+function sfxJump(){tone(400,0.08);setTimeout(()=>tone(600,0.1),40)}
+function sfxHit(){tone(80,0.3,'sawtooth',0.12)}
+function sfxCoin(){tone(900,0.08);setTimeout(()=>tone(1300,0.12),60)}
+function sfxTransform(){
+  [200,300,400,500,600,700,800,900,1000].forEach((f,i)=>setTimeout(()=>tone(f,0.15,'sawtooth',0.08),i*50));
+}
+function sfxThunder(){
+  // Deep rumble
+  tone(40,0.6,'sawtooth',0.15);
+  tone(55,0.5,'sawtooth',0.12);
+  setTimeout(()=>{tone(35,0.4,'sawtooth',0.1);tone(60,0.3,'square',0.08);},100);
+  setTimeout(()=>{tone(30,0.3,'sawtooth',0.08);},250);
+  // Crack
+  tone(800,0.04,'square',0.18);
+  setTimeout(()=>tone(600,0.05,'square',0.12),20);
+}
+
+// Music
+let musicInt=null;
+const musicNotes=[330,392,440,392,330,294,262,294,330,392,440,523,440,392,330,262,
+  349,440,523,440,349,294,330,349,392,440,392,330,262,220,262,330];
+function playMusic(){
+  stopMusic();if(!actx)return;
+  let i=0;musicInt=setInterval(()=>{
+    const n=musicNotes[i%musicNotes.length];
+    if(n>0){tone(n,0.12,'square',0.025);tone(n/2,0.12,'triangle',0.018);}
+    i++;
+  },140);
+}
+function stopMusic(){if(musicInt){clearInterval(musicInt);musicInt=null}}
+
+// ============ GAME STATE ============
+const ST={TITLE:0,PLAY:1,OVER:2,WIN:3,CUTSCENE:4,BOSS:5};
+let state=ST.TITLE;
+let gf=0;
+let score=0;
+let distance=0;
+let gameSpeed=5.5;
+const WIN_DIST=15000;
+let groundY=H-80;
+
+// Player
+let P={
+  x:120, y:groundY-110, w:70, h:110,
+  vy:0, onGround:true,
+  animFrame:0, animTimer:0,
+  alive:true, hp:3, inv:0
+};
+
+// Obstacles (cones on ground - world positioned)
+let obstacles=[];
+// Newspapers (falling from above - screen positioned)
+let newspapers=[];
+let effects=[];
+
+// Bridge scroll offset
+let scrollX=0;
+
+// ============ CUTSCENE SYSTEM (generic) ============
+let cutscene={
+  who:'',        // 'bruno' or 'acm'
+  phase:0,       // 0=enter, 1..N=dialog, N+1=action, N+2=exit, N+3=done
+  timer:0,
+  charX:W+100,
+  charTargetX:W*0.6,
+  dialogTexts:[],
+  dialogCount:0, // how many dialog lines
+  coneX:0, coneY:0, coneVy:0, coneLanded:false,
+  // ACM multi-newspaper throw state
+  jornalIndex:0, jornalSubPhase:0, thrownJornais:[]
+};
+
+// Bruno cutscene
+let brunoCutsceneTriggered=false;
+const BRUNO_TRIGGER_DIST=600;
+
+// ACM cutscene
+let acmCutsceneTriggered=false;
+const ACM_TRIGGER_DIST=WIN_DIST/2; // halfway = 6000
+
+// Cone spawning (after Bruno cutscene)
+let conesActive=false;
+let lastConeSpawnX=0;
+
+// Newspaper spawning (after ACM cutscene)
+let jornaisActive=false;
+let jornalSpawnTimer=0;
+let jornalCycleIndex=0; // cycles through all 4 to guarantee variety
+const jornalAssetKeys=['piada','cheiroMole','naoSai','naoTem'];
+
+// ============ BOSS FIGHT STATE ============
+let boss={
+  phase:0,       // 0=cutscene, 7=acm-transform, 1=arena, 3=jero-transform, 4=charge, 5=defeat
+  timer:0,
+  acmTransformTimer:0,
+  // ACM Negao
+  acmX:0, acmY:0, acmW:80, acmH:130,
+  acmAlive:true,
+  acmHitVx:0, acmHitVy:0, acmSpin:0,
+  // Caixa 13
+  caixaX:0, caixaY:0, caixaW:65, caixaH:60,
+  caixaHit:false, caixaBounceVy:0,
+  // Estrela
+  starActive:false, starX:0, starY:0, starW:40, starH:40, starVy:0, starCollected:false,
+  // Transformation
+  transformed:false, transformTimer:0,
+  // Cutscene dialog (phase 0)
+  dialogIndex:0,
+  dialogTexts:["Só quem pode fazer essa ponte sou eu.","ACM Negããããooooo!!!!!"],
+  charX:0, charTargetX:0,
+  // Speech balloon
+  speechTimer:0
+};
+
+// Boss music
+const bossNotes=[220,262,330,262,220,196,165,196,220,330,392,440,392,330,262,220,
+  196,220,262,330,392,440,523,440,392,330,262,220,196,165,196,220];
+function playBossMusic(){
+  stopMusic();if(!actx)return;
+  let i=0;musicInt=setInterval(()=>{
+    const n=bossNotes[i%bossNotes.length];
+    if(n>0){tone(n,0.1,'sawtooth',0.03);tone(n/2,0.1,'square',0.02);}
+    i++;
+  },100);
+}
+
+// Lightning (raio) effect - plays before newspapers start
+let raioEffect={
+  active:false,
+  timer:0,
+  duration:120,   // ~2 seconds at 60fps
+  phase:0,        // 0=flash, 1=bolt, 2=fade
+  flashAlpha:0,
+  boltAlpha:0,
+  boltX:W/2-80,
+  boltY:-50,
+  shakeX:0, shakeY:0
+};
+
+// ============ RAIO (LIGHTNING) EFFECT ============
+function startRaioEffect(){
+  raioEffect.active=true;
+  raioEffect.timer=0;
+  raioEffect.phase=0;
+  raioEffect.flashAlpha=0;
+  raioEffect.boltAlpha=0;
+  raioEffect.boltX=W/2-80;
+  raioEffect.boltY=-50;
+  raioEffect.shakeX=0;
+  raioEffect.shakeY=0;
+  sfxThunder();
+}
+
+function updateRaioEffect(){
+  if(!raioEffect.active)return;
+  raioEffect.timer++;
+
+  if(raioEffect.timer<=8){
+    // Phase 0: Initial white flash (screen goes white)
+    raioEffect.phase=0;
+    raioEffect.flashAlpha=Math.min(1, raioEffect.timer/4);
+    // Screen shake
+    raioEffect.shakeX=(Math.random()-0.5)*12;
+    raioEffect.shakeY=(Math.random()-0.5)*8;
+  }
+  else if(raioEffect.timer<=50){
+    // Phase 1: Lightning bolt visible, flash fading
+    raioEffect.phase=1;
+    raioEffect.boltAlpha=1;
+    raioEffect.flashAlpha=Math.max(0, 0.7-(raioEffect.timer-8)/20);
+    // Bolt descends into view
+    raioEffect.boltY=Math.min(20, -50+(raioEffect.timer-8)*4);
+    // Decreasing shake
+    const shake=Math.max(0, 8-(raioEffect.timer-8)*0.3);
+    raioEffect.shakeX=(Math.random()-0.5)*shake;
+    raioEffect.shakeY=(Math.random()-0.5)*shake;
+    // Secondary flash pulses
+    if(raioEffect.timer===25||raioEffect.timer===35){
+      raioEffect.flashAlpha=0.5;
+      sfxThunder();
+    }
+  }
+  else if(raioEffect.timer<=90){
+    // Phase 2: Bolt fading out, sky darkens briefly
+    raioEffect.phase=2;
+    raioEffect.boltAlpha=Math.max(0, 1-(raioEffect.timer-50)/30);
+    raioEffect.flashAlpha=0;
+    raioEffect.shakeX=0;raioEffect.shakeY=0;
+  }
+  else {
+    // Done - activate newspapers and music
+    raioEffect.active=false;
+    jornaisActive=true;
+    jornalSpawnTimer=0;
+    playMusic();
+  }
+}
+
+function drawRaioEffect(){
+  if(!raioEffect.active)return;
+
+  // Screen shake - apply to canvas transform
+  ctx.save();
+  ctx.translate(raioEffect.shakeX, raioEffect.shakeY);
+
+  // Lightning bolt image
+  if(raioEffect.boltAlpha>0 && assets.raio && assets.raio.complete){
+    ctx.globalAlpha=raioEffect.boltAlpha;
+    const rh=350;
+    const rw=rh*(assets.raio.naturalWidth/assets.raio.naturalHeight);
+    // Draw bolt in center-top of screen
+    const rx=W/2-rw/2+(Math.random()-0.5)*4; // slight jitter
+    ctx.drawImage(assets.raio, rx, raioEffect.boltY, rw, rh);
+    // Glow effect around bolt
+    ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=raioEffect.boltAlpha*0.3;
+    ctx.drawImage(assets.raio, rx-10, raioEffect.boltY-5, rw+20, rh+10);
+    ctx.globalCompositeOperation='source-over';
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+
+  // White flash overlay (drawn on top of everything)
+  if(raioEffect.flashAlpha>0){
+    ctx.fillStyle=`rgba(255,255,255,${raioEffect.flashAlpha})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // Dark overlay during fade (dramatic sky darkening)
+  if(raioEffect.phase===2){
+    const darkA=Math.min(0.3, (raioEffect.timer-50)/40*0.3)*(1-(raioEffect.timer-50)/40);
+    ctx.fillStyle=`rgba(20,0,40,${darkA})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // "NOTÍCIAS 24H!!!" text flashing during lightning
+  if(raioEffect.timer>15 && raioEffect.timer<70 && Math.floor(raioEffect.timer/8)%2===0){
+    ctx.textAlign='center';
+    ctx.fillStyle='#FFD700';
+    ctx.font='bold 36px monospace';
+    ctx.globalAlpha=raioEffect.boltAlpha;
+    ctx.fillText('NOTÍCIAS 24H!!!',W/2,H/2+80);
+    ctx.globalAlpha=1;
+    ctx.textAlign='left';
+  }
+}
+
+// ============ SPAWNING ============
+function spawnConeWave(){
+  const numCones=2+Math.floor(Math.random()*2);
+  let cx=scrollX+W+100;
+  for(let i=0;i<numCones;i++){
+    const gap=280+Math.floor(Math.random()*220);
+    cx+=gap;
+    obstacles.push({
+      type:'cone',
+      x:cx, y:groundY-55, w:45, h:55,
+      active:true
+    });
+  }
+  lastConeSpawnX=scrollX;
+}
+
+function spawnNewspaper(){
+  const assetKey=jornalAssetKeys[jornalCycleIndex % jornalAssetKeys.length];
+  jornalCycleIndex++;
+  newspapers.push({
+    x:60+Math.random()*(W-170), // random screen X position
+    y:-80,
+    w:60, h:60,
+    vy:2.5+Math.random()*1.5, // fall speed 2.5-4
+    active:true,
+    asset:assetKey,
+    rot:(Math.random()-0.5)*0.3 // slight rotation
+  });
+}
+
+// ============ TRIGGER CUTSCENE ============
+function triggerCutscene(who){
+  stopMusic();
+  cutscene.who=who;
+  cutscene.phase=0;
+  cutscene.timer=0;
+  cutscene.charX=W+100;
+  cutscene.charTargetX=W*0.6;
+  cutscene.coneLanded=false;
+
+  if(who==='bruno'){
+    cutscene.dialogTexts=[
+      "Chegou o pivete do Calabá!",
+      "Você não vai passar.",
+      "Essa ponte não tem como dar certo!"
+    ];
+  } else if(who==='acm'){
+    // Stop cones and clear them from the bridge
+    conesActive=false;
+    obstacles=[];
+    cutscene.dialogTexts=[
+      "Jero, tem notícias no Correio pra você.",
+      "Notícias 24h!!!"
+    ];
+  }
+  cutscene.dialogCount=cutscene.dialogTexts.length;
+  state=ST.CUTSCENE;
+}
+
+// ============ UPDATE PLAY ============
+function updatePlay(){
+  gf++;
+
+  // Pause gameplay during lightning effect
+  if(raioEffect.active) return;
+
+  // Auto-scroll
+  scrollX+=gameSpeed;
+  distance+=gameSpeed;
+
+  // Animate walking
+  P.animTimer++;
+  if(P.animTimer>8){P.animTimer=0;P.animFrame=1-P.animFrame;}
+
+  // === HORIZONTAL DODGE MOVEMENT ===
+  const moveSpeed=5;
+  if(isDown('ArrowLeft')||isDown('KeyA')) P.x-=moveSpeed;
+  if(isDown('ArrowRight')||isDown('KeyD')) P.x+=moveSpeed;
+  P.x=Math.max(10,Math.min(W-P.w-10,P.x)); // clamp to screen
+
+  // Jump
+  if((justP('Space')||justP('ArrowUp')||justP('KeyW')||touchJump)&&P.onGround){
+    P.vy=-13;
+    P.onGround=false;
+    sfxJump();
+  }
+  touchJump=false;
+
+  // Gravity
+  P.vy+=0.55;
+  P.y+=P.vy;
+
+  // Land on ground
+  if(P.y+P.h>=groundY){
+    P.y=groundY-P.h;
+    P.vy=0;
+    P.onGround=true;
+  }
+
+  // Invulnerability
+  if(P.inv>0)P.inv--;
+
+  // Cone collision (world positioned)
+  obstacles.forEach(o=>{
+    if(!o.active)return;
+    const ox=o.x-scrollX;
+    if(P.inv<=0 && P.x+P.w*0.6>ox+10 && P.x+P.w*0.2<ox+o.w-10 &&
+       P.y+P.h>o.y+10 && P.y<o.y+o.h){
+      hitPlayer();
+    }
+  });
+
+  // Newspaper collision (screen positioned)
+  newspapers.forEach(n=>{
+    if(!n.active)return;
+    if(P.inv<=0 && P.x+P.w*0.6>n.x+8 && P.x+P.w*0.2<n.x+n.w-8 &&
+       P.y+P.h>n.y+8 && P.y<n.y+n.h-8){
+      hitPlayer();
+      n.active=false;
+    }
+  });
+
+  // Update falling newspapers
+  newspapers.forEach(n=>{
+    if(!n.active)return;
+    n.y+=n.vy;
+    n.rot+=0.02; // gentle spin
+    // Remove if off screen below
+    if(n.y>H+50) n.active=false;
+  });
+  newspapers=newspapers.filter(n=>n.active);
+
+  // Update effects
+  effects.forEach(e=>e.timer--);
+  effects=effects.filter(e=>e.timer>0);
+
+  // Clean up off-screen obstacles
+  obstacles=obstacles.filter(o=>o.x-scrollX>-100);
+
+  // === TRIGGER CUTSCENES ===
+  if(!brunoCutsceneTriggered && distance>BRUNO_TRIGGER_DIST){
+    brunoCutsceneTriggered=true;
+    triggerCutscene('bruno');
+    return;
+  }
+  if(!acmCutsceneTriggered && distance>ACM_TRIGGER_DIST){
+    acmCutsceneTriggered=true;
+    triggerCutscene('acm');
+    return;
+  }
+
+  // Spawn cones (after Bruno, STOP when jornais start)
+  if(conesActive && !jornaisActive && !acmCutsceneTriggered){
+    if(scrollX-lastConeSpawnX>700){
+      spawnConeWave();
+    }
+  }
+
+  // Spawn newspapers (after ACM cutscene) - replaces cones
+  if(jornaisActive){
+    if(conesActive){conesActive=false;obstacles=[];}
+    jornalSpawnTimer++;
+    // Spawn every 60-90 frames (~1-1.5 seconds)
+    if(jornalSpawnTimer>60+Math.random()*30){
+      jornalSpawnTimer=0;
+      spawnNewspaper();
+    }
+  }
+
+  // Gradually increase speed
+  gameSpeed=5.5+Math.min(distance/5000,2.5);
+
+  // Score from distance
+  if(gf%10===0)score+=1;
+}
+
+function hitPlayer(){
+  if(P.inv>0)return;
+  P.hp--;
+  P.inv=90;
+  sfxHit();
+  if(P.hp<=0){
+    P.alive=false;
+    stopMusic();
+    setTimeout(()=>{state=ST.OVER;},800);
+  }
+}
+
+// ============ UPDATE CUTSCENE ============
+function updateCutscene(){
+  gf++;
+  cutscene.timer++;
+
+  const anyPress=justP('Space')||justP('Enter')||justP('ArrowRight')||touchJump;
+  touchJump=false;
+
+  const numDialogs=cutscene.dialogCount;
+
+  if(cutscene.phase===0){
+    // Character walks in from right
+    cutscene.charX-=3;
+    if(cutscene.charX<=cutscene.charTargetX){
+      cutscene.charX=cutscene.charTargetX;
+      cutscene.phase=1; // first dialog
+      cutscene.timer=0;
+      tone(300,0.15);
+    }
+  }
+  else if(cutscene.phase>=1 && cutscene.phase<=numDialogs){
+    // Dialog phases
+    if(anyPress && cutscene.timer>25){
+      if(cutscene.phase<numDialogs){
+        cutscene.phase++;
+        cutscene.timer=0;
+        tone(400,0.08);
+      } else {
+        // Last dialog done → action phase
+        cutscene.phase=numDialogs+1;
+        cutscene.timer=0;
+
+        if(cutscene.who==='bruno'){
+          // Setup cone to fly
+          cutscene.coneX=cutscene.charX+40;
+          cutscene.coneY=groundY-100;
+          cutscene.coneVy=-8;
+          cutscene.coneLanded=false;
+          tone(200,0.2,'sawtooth',0.08);
+        } else if(cutscene.who==='acm'){
+          // Setup first newspaper to fly (throws all 4 in sequence)
+          cutscene.coneX=cutscene.charX+30;
+          cutscene.coneY=groundY-80;
+          cutscene.coneVy=-7;
+          cutscene.coneLanded=false;
+          cutscene.jornalIndex=0;
+          cutscene.jornalSubPhase=0;
+          cutscene.thrownJornais=[];
+          tone(250,0.2,'sawtooth',0.08);
+        }
+      }
+    }
+  }
+  else if(cutscene.phase===numDialogs+1){
+    if(cutscene.who==='acm'){
+      // ACM throws all 4 newspapers in sequence
+      if(cutscene.jornalSubPhase===0){
+        // Flying phase
+        cutscene.coneX-=3.5;
+        cutscene.coneVy+=0.3;
+        cutscene.coneY+=cutscene.coneVy;
+        if(cutscene.coneY>=groundY-130){
+          // Land this newspaper at spread position
+          const landX=40+cutscene.jornalIndex*175;
+          cutscene.thrownJornais.push({
+            x:landX, y:groundY-130,
+            asset:jornalAssetKeys[cutscene.jornalIndex]
+          });
+          cutscene.jornalSubPhase=1;
+          cutscene.timer=0;
+          tone(150,0.15);
+        }
+      } else {
+        // Pause to let player read the headline (~1.3 seconds)
+        if(cutscene.timer>80){
+          cutscene.jornalIndex++;
+          if(cutscene.jornalIndex>=4){
+            // All 4 thrown → exit phase
+            cutscene.phase=numDialogs+2;
+            cutscene.timer=0;
+            tone(150,0.3,'sawtooth',0.06);
+          } else {
+            // Setup next newspaper throw
+            cutscene.jornalSubPhase=0;
+            cutscene.coneX=cutscene.charX+30;
+            cutscene.coneY=groundY-80;
+            cutscene.coneVy=-7;
+            cutscene.timer=0;
+            tone(250,0.15,'sawtooth',0.08);
+          }
+        }
+      }
+    } else {
+      // Bruno: single cone throw (original behavior)
+      cutscene.coneX-=4;
+      cutscene.coneVy+=0.35;
+      cutscene.coneY+=cutscene.coneVy;
+      if(cutscene.coneY>=groundY-55){
+        cutscene.coneY=groundY-55;
+        cutscene.coneLanded=true;
+        if(cutscene.timer>15){
+          cutscene.phase=numDialogs+2;
+          cutscene.timer=0;
+          tone(150,0.3,'sawtooth',0.06);
+        }
+      }
+    }
+  }
+  else if(cutscene.phase===numDialogs+2){
+    // Character walks off to right
+    cutscene.charX+=4;
+    if(cutscene.charX>W+150){
+      cutscene.phase=numDialogs+3; // done
+      cutscene.timer=0;
+    }
+  }
+  else if(cutscene.phase===numDialogs+3){
+    // End cutscene
+    if(cutscene.who==='bruno'){
+      conesActive=true;
+      lastConeSpawnX=scrollX-400;
+      state=ST.PLAY;
+      playMusic();
+    } else if(cutscene.who==='acm'){
+      // Trigger lightning effect instead of immediately starting newspapers
+      startRaioEffect();
+      state=ST.PLAY;
+    }
+  }
+}
+
+// ============ DRAW ============
+function drawBridge(){
+  const ponteImg=assets.ponte;
+  if(!ponteImg||!ponteImg.complete)return;
+  const pw=ponteImg.naturalWidth*(H/ponteImg.naturalHeight);
+  const offset=-(scrollX*0.8)%pw;
+  for(let x=offset-pw;x<W+pw;x+=pw){
+    ctx.drawImage(ponteImg,x,0,pw,H);
+  }
+}
+
+function drawPlayer(){
+  if(!P.alive&&gf%6<3)return;
+  if(P.inv>0&&gf%4<2)return;
+
+  const sprite=P.animFrame===0?assets.jero1:assets.jero2;
+  if(!sprite||!sprite.complete)return;
+  const img=P.onGround?sprite:assets.jero2;
+  const drawH=P.h;
+  const drawW=drawH*(img.naturalWidth/img.naturalHeight);
+  const bob=P.onGround?Math.sin(gf*0.3)*2:0;
+  ctx.drawImage(img, P.x, P.y+bob, drawW, drawH);
+}
+
+function drawPlayerStanding(){
+  const img=assets.jero1;
+  if(!img||!img.complete)return;
+  const drawH=P.h;
+  const drawW=drawH*(img.naturalWidth/img.naturalHeight);
+  ctx.drawImage(img, P.x, P.y, drawW, drawH);
+}
+
+function drawObstacles(){
+  obstacles.forEach(o=>{
+    if(!o.active)return;
+    const ox=o.x-scrollX;
+    if(ox<-60||ox>W+60)return;
+    if(o.type==='cone'&&assets.cone&&assets.cone.complete){
+      ctx.drawImage(assets.cone,ox,o.y,o.w,o.h);
+    }
+  });
+}
+
+function drawNewspapers(){
+  newspapers.forEach(n=>{
+    if(!n.active)return;
+    const img=assets[n.asset];
+    if(!img||!img.complete)return;
+    ctx.save();
+    ctx.translate(n.x+n.w/2, n.y+n.h/2);
+    ctx.rotate(n.rot);
+    ctx.drawImage(img,-n.w/2,-n.h/2,n.w,n.h);
+    ctx.restore();
+  });
+}
+
+function drawEffects(){
+  effects.forEach(e=>{
+    if(e.type==='score'){
+      ctx.globalAlpha=e.timer/30;
+      ctx.fillStyle='#FFD700';
+      ctx.font='bold 18px monospace';
+      ctx.textAlign='center';
+      ctx.fillText(e.text,e.x,e.y-20+(30-e.timer)*1.5);
+      ctx.textAlign='left';
+      ctx.globalAlpha=1;
+    }
+  });
+}
+
+function drawHUD(){
+  // HP hearts
+  for(let i=0;i<3;i++){
+    ctx.fillStyle=i<P.hp?'#E74C3C':'#444';
+    ctx.font='28px monospace';
+    ctx.fillText(i<P.hp?'❤':'🖤',15+i*35,38);
+  }
+
+  // Score
+  ctx.fillStyle='#FFD700';
+  ctx.font='bold 20px monospace';
+  ctx.textAlign='right';
+  ctx.fillText('R$ '+score,W-20,35);
+  ctx.textAlign='left';
+
+  // Distance
+  const km=(distance/WIN_DIST*12.4).toFixed(1);
+  ctx.fillStyle='#FFF';
+  ctx.font='bold 16px monospace';
+  ctx.textAlign='center';
+  ctx.fillText(km+' km / 12,4 km',W/2,30);
+  ctx.textAlign='left';
+
+  // Progress bar
+  const barW=200,barX=(W-barW)/2,barY=38;
+  ctx.fillStyle='#333';ctx.fillRect(barX,barY,barW,10);
+  const prog=Math.min(distance/WIN_DIST,1);
+  ctx.fillStyle='#27AE60';ctx.fillRect(barX,barY,barW*prog,10);
+  ctx.fillStyle='#FFF';ctx.font='8px monospace';
+  ctx.fillText('SSA',barX-25,barY+8);
+  ctx.textAlign='right';ctx.fillText('ITA',barX+barW+25,barY+8);ctx.textAlign='left';
+
+  // Boss trigger at 100% distance
+  if(prog>=1&&state===ST.PLAY){
+    stopMusic();
+    jornaisActive=false;
+    newspapers=[];
+    obstacles=[];
+    initBoss();
+    state=ST.BOSS;
+  }
+}
+
+// ============ DRAW CUTSCENE ============
+function drawCutscene(){
+  drawBridge();
+  drawPlayerStanding();
+
+  // Draw character (Bruno or ACM)
+  const charH=130;
+  const isTalking=(cutscene.phase>=1 && cutscene.phase<=cutscene.dialogCount);
+  let charImg;
+  if(cutscene.who==='bruno'){
+    charImg=isTalking?assets.bruno2:assets.bruno;
+  } else {
+    charImg=isTalking?assets.acm2:assets.acm;
+  }
+  if(charImg&&charImg.complete){
+    const charW=charH*(charImg.naturalWidth/charImg.naturalHeight);
+    ctx.drawImage(charImg,cutscene.charX,groundY-charH,charW,charH);
+  }
+
+  // Draw speech balloon during dialog
+  if(isTalking){
+    const lineIndex=cutscene.phase-1;
+    const text=cutscene.dialogTexts[lineIndex];
+
+    const bx=cutscene.charX-80;
+    const by=groundY-charH-120;
+    const bw=260;
+    const bh=100;
+
+    if(assets.balao&&assets.balao.complete){
+      ctx.drawImage(assets.balao,bx,by,bw,bh);
+    } else {
+      ctx.fillStyle='#FFF';
+      ctx.strokeStyle='#333';ctx.lineWidth=2;
+      ctx.beginPath();ctx.roundRect(bx,by,bw,bh-20,12);
+      ctx.fill();ctx.stroke();
+    }
+
+    // Text inside balloon
+    ctx.fillStyle='#000';
+    ctx.font='bold 13px monospace';
+    ctx.textAlign='center';
+
+    const maxLineW=bw-30;
+    const words=text.split(' ');
+    let lines=[];let currentLine='';
+    words.forEach(word=>{
+      const testLine=currentLine?currentLine+' '+word:word;
+      if(ctx.measureText(testLine).width>maxLineW){
+        lines.push(currentLine);currentLine=word;
+      } else { currentLine=testLine; }
+    });
+    if(currentLine)lines.push(currentLine);
+
+    const lineH=18;
+    const startY=by+bh/2-((lines.length-1)*lineH)/2-5;
+    lines.forEach((line,i)=>{
+      ctx.fillText(line,bx+bw/2,startY+i*lineH);
+    });
+    ctx.textAlign='left';
+
+    // "Toque para continuar"
+    if(cutscene.timer>25 && Math.floor(gf/20)%2===0){
+      ctx.fillStyle='rgba(255,255,255,0.7)';
+      ctx.font='12px monospace';
+      ctx.textAlign='center';
+      ctx.fillText('▶ Toque para continuar',W/2,H-25);
+      ctx.textAlign='left';
+    }
+  }
+
+  // Flying/thrown objects
+  const actionPhase=cutscene.dialogCount+1;
+
+  // ACM: draw all landed newspapers (readable size) during and after throwing
+  if(cutscene.who==='acm' && cutscene.phase>=actionPhase && cutscene.thrownJornais){
+    cutscene.thrownJornais.forEach(j=>{
+      const jImg=assets[j.asset];
+      if(jImg&&jImg.complete){
+        const jw=135,jh=jw*(jImg.naturalHeight/jImg.naturalWidth);
+        ctx.drawImage(jImg,j.x,j.y,jw,jh);
+      }
+    });
+  }
+
+  if(cutscene.phase===actionPhase){
+    if(cutscene.who==='bruno'){
+      // Bruno: cone flying in arc
+      ctx.save();
+      ctx.translate(cutscene.coneX+22,cutscene.coneY+27);
+      ctx.rotate(Math.sin(cutscene.timer*0.3)*0.4);
+      if(assets.cone&&assets.cone.complete){
+        ctx.drawImage(assets.cone,-22,-27,45,55);
+      }
+      ctx.restore();
+    } else if(cutscene.who==='acm' && cutscene.jornalSubPhase===0){
+      // ACM: currently flying newspaper
+      const curAsset=jornalAssetKeys[cutscene.jornalIndex];
+      const curImg=assets[curAsset];
+      if(curImg&&curImg.complete){
+        ctx.save();
+        ctx.translate(cutscene.coneX+30,cutscene.coneY+30);
+        ctx.rotate(Math.sin(cutscene.timer*0.3)*0.5);
+        ctx.drawImage(curImg,-30,-30,60,60);
+        ctx.restore();
+      }
+    }
+  }
+
+  // Landed cone (Bruno only - ACM uses thrownJornais above)
+  if(cutscene.phase>=actionPhase+1 && cutscene.coneLanded && cutscene.who==='bruno'){
+    if(assets.cone&&assets.cone.complete){
+      ctx.drawImage(assets.cone,cutscene.coneX,groundY-55,45,55);
+    }
+  }
+
+  drawHUD();
+}
+
+// ============ SCREENS ============
+function drawTitle(){
+  if(assets.ponte&&assets.ponte.complete){
+    const pw=assets.ponte.naturalWidth*(H/assets.ponte.naturalHeight);
+    const offset=-(gf*0.5)%pw;
+    for(let x=offset-pw;x<W+pw;x+=pw){ctx.drawImage(assets.ponte,x,0,pw,H);}
+  }
+
+  ctx.fillStyle='rgba(0,0,0,0.55)';
+  ctx.fillRect(0,0,W,H);
+
+  ctx.fillStyle='#FFD700';ctx.font='bold 36px monospace';ctx.textAlign='center';
+  ctx.fillText('PONTE SALVADOR-ITAPARICA',W/2,120);
+
+  ctx.fillStyle='#FFF';ctx.font='bold 24px monospace';
+  ctx.fillText('A Travessia de Jerônimo',W/2,160);
+
+  ctx.fillStyle='#87CEEB';ctx.font='bold 16px monospace';
+  ctx.fillText('12,4 km de Pura Persistência',W/2,190);
+
+  if(assets.jero1&&assets.jero1.complete){
+    const jh=130,jw=jh*(assets.jero1.naturalWidth/assets.jero1.naturalHeight);
+    ctx.drawImage(assets.jero1,W/2-160,H-250,jw,jh);
+  }
+  if(assets.bruno&&assets.bruno.complete){
+    const bh=120,bw=bh*(assets.bruno.naturalWidth/assets.bruno.naturalHeight);
+    ctx.drawImage(assets.bruno,W/2+60,H-240,bw,bh);
+  }
+  if(assets.acm&&assets.acm.complete){
+    const ah=120,aw=ah*(assets.acm.naturalWidth/assets.acm.naturalHeight);
+    ctx.drawImage(assets.acm,W/2+180,H-240,aw,ah);
+  }
+
+  if(Math.floor(gf/25)%2===0){
+    ctx.fillStyle='#FFF';ctx.font='bold 22px monospace';
+    ctx.fillText('PRESSIONE ENTER OU TOQUE PARA JOGAR',W/2,H-60);
+  }
+
+  ctx.fillStyle='#AAA';ctx.font='14px monospace';
+  ctx.fillText('SPACE = Pular  |  ←→ = Desviar  |  Sobreviva!',W/2,H-30);
+  ctx.textAlign='left';
+}
+
+function drawGameOver(){
+  ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#E74C3C';ctx.font='bold 50px monospace';
+  ctx.fillText('GAME OVER',W/2,150);
+
+  ctx.fillStyle='#FFF';ctx.font='bold 20px monospace';
+  ctx.fillText('A oposição venceu... por enquanto!',W/2,200);
+
+  ctx.fillStyle='#FFD700';ctx.font='bold 24px monospace';
+  ctx.fillText('Pontuação: R$ '+score,W/2,260);
+
+  const km=(distance/WIN_DIST*12.4).toFixed(1);
+  ctx.fillStyle='#87CEEB';ctx.font='18px monospace';
+  ctx.fillText('Distância: '+km+' km de 12,4 km',W/2,300);
+
+  if(Math.floor(gf/25)%2===0){
+    ctx.fillStyle='#FFF';ctx.font='bold 18px monospace';
+    ctx.fillText('PRESSIONE ENTER PARA TENTAR NOVAMENTE',W/2,H-60);
+  }
+  ctx.textAlign='left';
+}
+
+function drawWin(){
+  if(assets.ponte&&assets.ponte.complete){
+    const pw=assets.ponte.naturalWidth*(H/assets.ponte.naturalHeight);
+    for(let x=0;x<W+pw;x+=pw){ctx.drawImage(assets.ponte,x,0,pw,H);}
+  }
+
+  ctx.fillStyle='rgba(0,0,50,0.4)';ctx.fillRect(0,0,W,H);
+
+  const cols=['#E74C3C','#FFD700','#27AE60','#FF69B4','#00BFFF','#E67E22'];
+  for(let f=0;f<8;f++){
+    const fx=60+f*(W-120)/7,fy=60+Math.sin(f*1.3)*30;
+    const burst=(gf+f*15)%50;
+    if(burst<25){
+      for(let j=0;j<8;j++){
+        const a=j*Math.PI*2/8+gf*0.02,r=burst*2;
+        ctx.fillStyle=cols[(f+j)%cols.length];
+        ctx.fillRect(fx+Math.cos(a)*r,fy+Math.sin(a)*r,4,4);
+      }
+    }
+  }
+
+  if(assets.jero2&&assets.jero2.complete){
+    const jh=140,jw=jh*(assets.jero2.naturalWidth/assets.jero2.naturalHeight);
+    ctx.drawImage(assets.jero2,W/2-jw/2,H-280+Math.sin(gf*0.08)*5,jw,jh);
+  }
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#FFD700';ctx.font='bold 44px monospace';
+  ctx.fillText('PONTE CONCLUÍDA!',W/2,100);
+  ctx.fillStyle='#FFF';ctx.font='bold 22px monospace';
+  ctx.fillText('12,4 KM DE PURA BAIANIDADE!',W/2,145);
+  ctx.fillStyle='#27AE60';ctx.font='bold 28px monospace';
+  ctx.fillText('O POVO VENCEU!',W/2,200);
+
+  if(Math.floor(gf/25)%2===0){
+    ctx.fillStyle='#FFF';ctx.font='bold 18px monospace';
+    ctx.fillText('PRESSIONE ENTER PARA JOGAR NOVAMENTE',W/2,H-40);
+  }
+  ctx.textAlign='left';
+}
+
+// ============ BOSS FIGHT ============
+function initBoss(){
+  boss.phase=0;boss.timer=0;boss.dialogIndex=0;
+  boss.charX=W+100;boss.charTargetX=W*0.6;
+  boss.acmAlive=true;boss.acmHitVx=0;boss.acmHitVy=0;boss.acmSpin=0;
+  boss.caixaHit=false;boss.caixaBounceVy=0;
+  boss.starActive=false;boss.starCollected=false;
+  boss.transformed=false;boss.transformTimer=0;boss.speechTimer=0;
+  // Caixa 13 floating in middle-upper screen
+  boss.caixaX=W/2-32;boss.caixaY=200;
+  boss.caixaW=65;boss.caixaH=60;
+  // Star starts inside box
+  boss.starX=boss.caixaX+12;boss.starY=boss.caixaY-40;
+  boss.starW=40;boss.starH=40;boss.starVy=0;
+  // ACM on right (starts normal size, grows in phase 7)
+  boss.acmX=W-140;boss.acmY=groundY-130;
+  boss.acmW=80;boss.acmH=130;
+  boss.acmTransformTimer=0;
+  // Reset player pos
+  P.x=120;P.inv=60;
+}
+
+function updateBoss(){
+  gf++;
+  boss.timer++;
+
+  const anyPress=justP('Space')||justP('Enter')||justP('ArrowRight')||touchJump;
+  touchJump=false;
+
+  // === PHASE 0: ACM RETURNS CUTSCENE ===
+  if(boss.phase===0){
+    if(boss.dialogIndex===0){
+      // ACM walks in
+      boss.charX-=3;
+      if(boss.charX<=boss.charTargetX){
+        boss.charX=boss.charTargetX;
+        boss.dialogIndex=1;
+        boss.timer=0;
+        tone(300,0.15);
+      }
+    }
+    else if(boss.dialogIndex>=1 && boss.dialogIndex<=boss.dialogTexts.length){
+      if(anyPress && boss.timer>25){
+        if(boss.dialogIndex<boss.dialogTexts.length){
+          boss.dialogIndex++;
+          boss.timer=0;
+          tone(400,0.08);
+        } else {
+          // All dialog done → ACM transformation phase
+          boss.phase=7; // ACM Negão transform phase
+          boss.timer=0;
+          boss.acmTransformTimer=0;
+          // Position arena ACM exactly where cutscene ACM is
+          boss.acmX=boss.charX;
+          boss.acmY=groundY-boss.acmH;
+          P.x=120;P.inv=60;
+          sfxTransform();
+        }
+      }
+    }
+  }
+
+  // === PHASE 7: ACM NEGÃO TRANSFORMATION ===
+  else if(boss.phase===7){
+    boss.acmTransformTimer++;
+    // 13 frames × 8 ticks = 104 frames animation + 26 pause = 130 total
+    if(boss.acmTransformTimer>=130){
+      boss.phase=1;
+      boss.timer=0;
+      // Set ACM to final transformed size (hitbox, visual is wider via aspect ratio)
+      boss.acmH=170;
+      boss.acmW=90; // hitbox width (visual will be wider)
+      boss.acmY=groundY-boss.acmH;
+      playBossMusic();
+    }
+  }
+
+  // === PHASE 1: BOSS ARENA ===
+  else if(boss.phase===1){
+    // Player movement
+    const moveSpeed=5;
+    if(isDown('ArrowLeft')||isDown('KeyA')) P.x-=moveSpeed;
+    if(isDown('ArrowRight')||isDown('KeyD')) P.x+=moveSpeed;
+    P.x=Math.max(10,Math.min(W-P.w-10,P.x));
+
+    if((justP('Space')||justP('ArrowUp')||justP('KeyW')||touchJump)&&P.onGround){
+      P.vy=-13;P.onGround=false;sfxJump();
+    }
+    touchJump=false;
+
+    // Gravity
+    P.vy+=0.55;P.y+=P.vy;
+    if(P.y+P.h>=groundY){P.y=groundY-P.h;P.vy=0;P.onGround=true;}
+
+    // Walk anim
+    P.animTimer++;
+    if(P.animTimer>8){P.animTimer=0;P.animFrame=1-P.animFrame;}
+
+    // Invulnerability
+    if(P.inv>0)P.inv--;
+
+    // Caixa bounce animation
+    if(boss.caixaBounceVy!==0){
+      boss.caixaY+=boss.caixaBounceVy;
+      boss.caixaBounceVy+=0.3;
+      if(boss.caixaY>=200){boss.caixaY=200;boss.caixaBounceVy=0;}
+    }
+
+    // HEAD HIT CAIXA 13 (from below)
+    if(!boss.caixaHit && P.vy<0){
+      if(P.x+P.w*0.7>boss.caixaX && P.x+P.w*0.3<boss.caixaX+boss.caixaW &&
+         P.y<=boss.caixaY+boss.caixaH && P.y+20>boss.caixaY){
+        boss.caixaHit=true;
+        boss.caixaBounceVy=-5;
+        P.vy=2; // bounce player down
+        sfxCoin();
+        // Spawn star
+        boss.starActive=true;
+        boss.starX=boss.caixaX+12;
+        boss.starY=boss.caixaY-boss.starH;
+        boss.starVy=-4;
+      }
+    }
+
+    // TOUCH ACM = knockback + damage (not transformed)
+    if(P.inv<=0 && boss.acmAlive && !boss.transformed){
+      if(P.x+P.w*0.6>boss.acmX+10 && P.x+P.w*0.2<boss.acmX+boss.acmW-10 &&
+         P.y+P.h>boss.acmY+10 && P.y<boss.acmY+boss.acmH){
+        // Knockback: push player back and up
+        P.x-=120;
+        P.vy=-8;
+        P.onGround=false;
+        if(P.x<10)P.x=10;
+        hitPlayer(); // takes 1 HP + invulnerability
+        return;
+      }
+    }
+
+    // Star physics
+    if(boss.starActive && !boss.starCollected){
+      boss.starVy+=0.25;
+      boss.starY+=boss.starVy;
+      if(boss.starY+boss.starH>=groundY){boss.starY=groundY-boss.starH;boss.starVy=0;}
+
+      // Pick up star
+      if(P.x+P.w>boss.starX && P.x<boss.starX+boss.starW &&
+         P.y+P.h>boss.starY && P.y<boss.starY+boss.starH){
+        boss.starCollected=true;
+        boss.starActive=false;
+        boss.phase=3;
+        boss.timer=0;
+        boss.transformTimer=0;
+        sfxTransform();
+        stopMusic();
+      }
+    }
+  }
+
+  // === PHASE 3: TRANSFORMATION ===
+  else if(boss.phase===3){
+    boss.transformTimer++;
+
+    if(boss.transformTimer===1){
+      boss.transformed=true;
+    }
+    if(boss.transformTimer===90){
+      boss.speechTimer=1;
+    }
+    if(boss.transformTimer>90){
+      boss.speechTimer++;
+    }
+    if(boss.transformTimer>=180){
+      boss.phase=4;
+      boss.timer=0;
+      playBossMusic();
+    }
+  }
+
+  // === PHASE 4: CHARGE! ===
+  else if(boss.phase===4){
+    const moveSpeed=7;
+    if(isDown('ArrowLeft')||isDown('KeyA')) P.x-=moveSpeed;
+    if(isDown('ArrowRight')||isDown('KeyD')) P.x+=moveSpeed;
+    P.x=Math.max(10,Math.min(W-P.w-10,P.x));
+
+    if((justP('Space')||justP('ArrowUp')||justP('KeyW')||touchJump)&&P.onGround){
+      P.vy=-13;P.onGround=false;sfxJump();
+    }
+    touchJump=false;
+
+    P.vy+=0.55;P.y+=P.vy;
+    if(P.y+P.h>=groundY){P.y=groundY-P.h;P.vy=0;P.onGround=true;}
+
+    P.animTimer++;
+    if(P.animTimer>8){P.animTimer=0;P.animFrame=1-P.animFrame;}
+
+    // RAM ACM
+    if(boss.acmAlive &&
+       P.x+P.w*0.7>boss.acmX && P.x+P.w*0.2<boss.acmX+boss.acmW &&
+       P.y+P.h>boss.acmY+10 && P.y<boss.acmY+boss.acmH){
+      boss.acmAlive=false;
+      boss.acmHitVx=8;
+      boss.acmHitVy=-10;
+      boss.phase=5;
+      boss.timer=0;
+      sfxHit();
+      tone(100,0.5,'sawtooth',0.15);
+      stopMusic();
+    }
+  }
+
+  // === PHASE 5: ACM FLIES INTO SEA ===
+  else if(boss.phase===5){
+    boss.acmX+=boss.acmHitVx;
+    boss.acmHitVy+=0.35;
+    boss.acmY+=boss.acmHitVy;
+    boss.acmSpin+=0.25;
+
+    if(boss.acmY>H+200||boss.acmX>W+200){
+      sfxTransform();
+      setTimeout(()=>{state=ST.WIN;},1500);
+      boss.phase=6; // done, waiting
+    }
+  }
+}
+
+function drawBoss(){
+  drawBridge();
+
+  // Caixa 13 (só aparece a partir da phase 1 - arena)
+  if(boss.phase>=1 && boss.phase<=4 && assets.caixa13&&assets.caixa13.complete){
+    if(!boss.caixaHit||boss.caixaBounceVy!==0){
+      // Floating animation
+      const floatY=boss.caixaY+Math.sin(gf*0.05)*4;
+      ctx.drawImage(assets.caixa13,boss.caixaX,floatY,boss.caixaW,boss.caixaH);
+    } else {
+      // Hit - draw darker (empty)
+      ctx.globalAlpha=0.35;
+      ctx.drawImage(assets.caixa13,boss.caixaX,boss.caixaY,boss.caixaW,boss.caixaH);
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // Star
+  if(boss.starActive&&!boss.starCollected&&assets.estrela&&assets.estrela.complete){
+    ctx.save();
+    ctx.translate(boss.starX+boss.starW/2,boss.starY+boss.starH/2);
+    ctx.rotate(Math.sin(gf*0.12)*0.4);
+    // Glow
+    ctx.globalAlpha=0.3+Math.sin(gf*0.1)*0.15;
+    ctx.drawImage(assets.estrela,-boss.starW/2-5,-boss.starH/2-5,boss.starW+10,boss.starH+10);
+    ctx.globalAlpha=1;
+    ctx.drawImage(assets.estrela,-boss.starW/2,-boss.starH/2,boss.starW,boss.starH);
+    ctx.restore();
+  }
+
+  // ACM Negão (phase 7=transform, phase 1+=arena)
+  // Frame images are 800x450 (landscape) - draw respecting aspect ratio
+  if(boss.acmAlive && boss.phase===7){
+    // Transformation animation using 13 frames, 8 ticks each
+    const frameIdx=Math.min(ACM_FRAME_COUNT-1,Math.floor(boss.acmTransformTimer/8));
+    const frameImg=acmFrames[frameIdx];
+    if(frameImg){
+      const progress=Math.min(1,boss.acmTransformTimer/104);
+      const drawH=130+progress*40; // 130→170
+      const drawW=drawH*(frameImg.naturalWidth/frameImg.naturalHeight); // proper aspect ratio
+      // Center on ACM's feet position
+      const drawX=boss.acmX+boss.acmW/2-drawW/2;
+      const drawY=groundY-drawH;
+      ctx.drawImage(frameImg,drawX,drawY,drawW,drawH);
+    }
+  } else if(boss.acmAlive && boss.phase>=1){
+    // Loop between frame_035 (index 11) and frame_036 (index 12)
+    const loopIdx=(Math.floor(gf/20)%2===0)?11:12;
+    const acmNegaoImg=acmFrames.length>0?acmFrames[loopIdx]:assets.acm;
+    if(acmNegaoImg){
+      const drawH=boss.acmH; // 170
+      const drawW=drawH*(acmNegaoImg.naturalWidth/acmNegaoImg.naturalHeight);
+      const drawX=boss.acmX+boss.acmW/2-drawW/2; // center on hitbox
+      const drawY=groundY-drawH;
+      ctx.drawImage(acmNegaoImg,drawX,drawY,drawW,drawH);
+    }
+  } else if(boss.phase===5||boss.phase===6){
+    // Spinning away - use frame_036 (last frame)
+    const spinImg=acmFrames.length>0?acmFrames[12]:assets.acm2;
+    if(spinImg){
+      const drawH=boss.acmH;
+      const drawW=drawH*(spinImg.naturalWidth/spinImg.naturalHeight);
+      ctx.save();
+      ctx.translate(boss.acmX+boss.acmW/2,boss.acmY+boss.acmH/2);
+      ctx.rotate(boss.acmSpin);
+      ctx.drawImage(spinImg,-drawW/2,-drawH/2,drawW,drawH);
+      ctx.restore();
+    }
+  }
+
+  // Player
+  if(boss.phase===0||boss.phase===7){
+    drawPlayerStanding();
+  } else if(boss.transformed){
+    drawPlayerCavalo();
+  } else {
+    drawPlayer();
+  }
+
+  // === CUTSCENE DIALOG (phase 0) ===
+  if(boss.phase===0){
+    const charH=130;
+    const isTalking=(boss.dialogIndex>=1&&boss.dialogIndex<=boss.dialogTexts.length);
+    const charImg=isTalking?assets.acm2:assets.acm;
+    if(charImg&&charImg.complete){
+      const charW=charH*(charImg.naturalWidth/charImg.naturalHeight);
+      ctx.drawImage(charImg,boss.charX,groundY-charH,charW,charH);
+    }
+
+    if(isTalking){
+      const text=boss.dialogTexts[boss.dialogIndex-1];
+      const bx=boss.charX-80,by=groundY-charH-120,bw=280,bh=100;
+      if(assets.balao&&assets.balao.complete){
+        ctx.drawImage(assets.balao,bx,by,bw,bh);
+      } else {
+        ctx.fillStyle='#FFF';ctx.strokeStyle='#333';ctx.lineWidth=2;
+        ctx.beginPath();ctx.roundRect(bx,by,bw,bh-20,12);ctx.fill();ctx.stroke();
+      }
+      ctx.fillStyle='#000';ctx.font='bold 13px monospace';ctx.textAlign='center';
+      const maxLineW=bw-30;
+      const words=text.split(' ');let lines=[],currentLine='';
+      words.forEach(word=>{
+        const testLine=currentLine?currentLine+' '+word:word;
+        if(ctx.measureText(testLine).width>maxLineW){lines.push(currentLine);currentLine=word;}
+        else{currentLine=testLine;}
+      });
+      if(currentLine)lines.push(currentLine);
+      const lineH=18,startY=by+bh/2-((lines.length-1)*lineH)/2-5;
+      lines.forEach((line,i)=>{ctx.fillText(line,bx+bw/2,startY+i*lineH);});
+      ctx.textAlign='left';
+
+      if(boss.timer>25&&Math.floor(gf/20)%2===0){
+        ctx.fillStyle='rgba(255,255,255,0.7)';ctx.font='12px monospace';ctx.textAlign='center';
+        ctx.fillText('▶ Toque para continuar',W/2,H-25);ctx.textAlign='left';
+      }
+    }
+  }
+
+  // === ACM NEGÃO TRANSFORMATION EFFECTS (phase 7) ===
+  if(boss.phase===7){
+    // Red/dark flash overlay during transformation
+    if(boss.acmTransformTimer<90&&Math.floor(boss.acmTransformTimer/4)%2===0){
+      ctx.fillStyle='rgba(150,0,0,0.25)';ctx.fillRect(0,0,W,H);
+    }
+    // Screen shake throughout animation
+    if(boss.acmTransformTimer<104){
+      const shk=Math.max(0,6-boss.acmTransformTimer*0.05);
+      ctx.save();
+      ctx.translate((Math.random()-0.5)*shk,(Math.random()-0.5)*shk);
+    }
+    // "ACM NEGÃO" text growing at end of animation
+    if(boss.acmTransformTimer>70){
+      const scale=Math.min(1,(boss.acmTransformTimer-70)/40);
+      ctx.textAlign='center';
+      ctx.fillStyle='#FF2222';
+      ctx.font=`bold ${Math.floor(24+scale*24)}px monospace`;
+      ctx.globalAlpha=Math.min(1,scale*1.5);
+      ctx.fillText('ACM NEGÃO!!!',W/2,120);
+      ctx.globalAlpha=1;
+      ctx.textAlign='left';
+    }
+    if(boss.acmTransformTimer<104) ctx.restore();
+  }
+
+  // === TRANSFORMATION EFFECTS (phase 3) ===
+  if(boss.phase===3){
+    // Yellow flash
+    if(boss.transformTimer<60&&Math.floor(boss.transformTimer/4)%2===0){
+      ctx.fillStyle='rgba(255,255,0,0.3)';ctx.fillRect(0,0,W,H);
+    }
+    // Screen shake
+    if(boss.transformTimer<40){
+      ctx.save();
+      ctx.translate((Math.random()-0.5)*6,(Math.random()-0.5)*4);
+    }
+    // Speech balloon: JERONIMOOOOOO!!!!
+    if(boss.speechTimer>0&&boss.speechTimer<90){
+      const bx=P.x-70,by=P.y-110,bw=260,bh=80;
+      if(assets.balao&&assets.balao.complete){
+        ctx.drawImage(assets.balao,bx,by,bw,bh);
+      } else {
+        ctx.fillStyle='#FFF';ctx.strokeStyle='#333';ctx.lineWidth=2;
+        ctx.beginPath();ctx.roundRect(bx,by,bw,bh-15,12);ctx.fill();ctx.stroke();
+      }
+      ctx.fillStyle='#C00';ctx.font='bold 18px monospace';ctx.textAlign='center';
+      ctx.fillText('JERONIMOOOOOO!!!!',bx+bw/2,by+bh/2-5);
+      ctx.textAlign='left';
+    }
+    if(boss.transformTimer<40) ctx.restore();
+  }
+
+  // === CHARGE PROMPT (phase 4) ===
+  if(boss.phase===4&&boss.timer<180&&Math.floor(gf/15)%2===0){
+    ctx.textAlign='center';ctx.fillStyle='#FF0';ctx.font='bold 30px monospace';
+    ctx.fillText('AVANCE!',W/2,100);ctx.textAlign='left';
+  }
+
+  // Boss HUD
+  drawBossHUD();
+}
+
+function drawPlayerCavalo(){
+  if(P.inv>0&&gf%4<2)return;
+
+  let sprite;
+  if(boss.phase===3&&boss.transformTimer<60){
+    sprite=assets.jeroCavalo3; // transformation pose
+  } else {
+    sprite=P.animFrame===0?assets.jeroCavalo:assets.jeroCavalo2;
+  }
+  if(!sprite||!sprite.complete)sprite=assets.jero1;
+
+  const drawH=P.h+60; // ~170px, mesmo tamanho do ACM Negão
+  const drawW=drawH*(sprite.naturalWidth/sprite.naturalHeight);
+  const bob=P.onGround?Math.sin(gf*0.3)*2:0;
+  ctx.drawImage(sprite,P.x-8,P.y+bob-55,drawW,drawH);
+}
+
+function drawBossHUD(){
+  // HP hearts
+  for(let i=0;i<3;i++){
+    ctx.fillStyle=i<P.hp?'#E74C3C':'#444';
+    ctx.font='28px monospace';
+    ctx.fillText(i<P.hp?'❤':'🖤',15+i*35,38);
+  }
+  // Score
+  ctx.fillStyle='#FFD700';ctx.font='bold 20px monospace';ctx.textAlign='right';
+  ctx.fillText('R$ '+score,W-20,35);ctx.textAlign='left';
+  // Boss label
+  if((boss.phase>=1||boss.phase===7)&&boss.acmAlive){
+    ctx.textAlign='center';ctx.fillStyle='#FF4444';ctx.font='bold 20px monospace';
+    ctx.fillText('⚡ ACM NEGÃO ⚡',W/2,30);ctx.textAlign='left';
+  }
+}
+
+// ============ RESET ============
+function resetGame(){
+  P={x:120,y:groundY-110,w:70,h:110,vy:0,onGround:true,animFrame:0,animTimer:0,alive:true,hp:3,inv:90};
+  obstacles=[];newspapers=[];effects=[];
+  scrollX=0;distance=0;score=0;gameSpeed=5.5;
+  brunoCutsceneTriggered=false;
+  acmCutsceneTriggered=false;
+  conesActive=false;
+  jornaisActive=false;
+  lastConeSpawnX=0;
+  jornalSpawnTimer=0;
+  cutscene.phase=0;cutscene.timer=0;cutscene.charX=W+100;
+  cutscene.coneLanded=false;
+  cutscene.jornalIndex=0;cutscene.jornalSubPhase=0;cutscene.thrownJornais=[];
+  jornalCycleIndex=0;
+  raioEffect.active=false;raioEffect.timer=0;
+  boss.phase=0;boss.timer=0;boss.acmAlive=true;boss.acmTransformTimer=0;
+  boss.caixaHit=false;boss.starActive=false;boss.starCollected=false;
+  boss.transformed=false;boss.transformTimer=0;boss.speechTimer=0;
+  boss.dialogIndex=0;boss.charX=W+100;
+  boss.acmHitVy=0;boss.acmHitVx=0;boss.acmSpin=0;
+}
+
+// ============ MAIN LOOP ============
+function loop(){
+  gf++;
+  ctx.clearRect(0,0,W,H);
+
+  switch(state){
+    case ST.TITLE:
+      drawTitle();
+      if(justP('Enter')||justP('Space')||touchJump){
+        initAudio();resetGame();state=ST.PLAY;playMusic();touchJump=false;
+      }
+      break;
+
+    case ST.PLAY:
+      updatePlay();
+      updateRaioEffect();
+      drawBridge();
+      drawObstacles();
+      drawNewspapers();
+      drawPlayer();
+      drawEffects();
+      drawHUD();
+      drawRaioEffect();
+      break;
+
+    case ST.CUTSCENE:
+      updateCutscene();
+      drawCutscene();
+      break;
+
+    case ST.BOSS:
+      updateBoss();
+      drawBoss();
+      break;
+
+    case ST.OVER:
+      drawBridge();
+      drawGameOver();
+      if(justP('Enter')||justP('Space')||touchJump){
+        resetGame();state=ST.PLAY;playMusic();touchJump=false;
+      }
+      break;
+
+    case ST.WIN:
+      drawWin();
+      if(justP('Enter')||justP('Space')||touchJump){
+        resetGame();state=ST.TITLE;touchJump=false;
+      }
+      break;
+  }
+
+  clearJP();
+  requestAnimationFrame(loop);
+}
+
+// Loading screen
+function loadingLoop(){
+  ctx.fillStyle='#0D1B2A';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#FFF';ctx.font='bold 24px monospace';ctx.textAlign='center';
+  ctx.fillText('Carregando...',W/2,H/2-20);
+  ctx.fillStyle='#FFD700';
+  const pct=Math.floor(loaded/toLoad.length*100);
+  ctx.fillRect(W/2-100,H/2,200*(loaded/toLoad.length),20);
+  ctx.strokeStyle='#FFF';ctx.strokeRect(W/2-100,H/2,200,20);
+  ctx.fillStyle='#FFF';ctx.font='14px monospace';
+  ctx.fillText(pct+'%',W/2,H/2+35);
+  ctx.textAlign='left';
+
+  if(allLoaded){requestAnimationFrame(loop);}
+  else {requestAnimationFrame(loadingLoop);}
+}
+requestAnimationFrame(loadingLoop);
+
+</script>
+</body>
+</html>
