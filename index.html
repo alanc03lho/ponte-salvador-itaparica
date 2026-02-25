@@ -168,8 +168,8 @@ let state=ST.TITLE;
 let gf=0;
 let score=0;
 let distance=0;
-let gameSpeed=5.5;
-const WIN_DIST=15000;
+let gameSpeed=6.5;
+const WIN_DIST=12000;
 let groundY=H-80;
 
 // Player
@@ -549,7 +549,7 @@ function updatePlay(){
   }
 
   // Gradually increase speed
-  gameSpeed=5.5+Math.min(distance/3000,2.5);
+  gameSpeed=6.5+Math.min(distance/3000,2.5);
 
   // Score from distance
   if(gf%10===0)score+=1;
@@ -1483,7 +1483,7 @@ function drawBossHUD(){
 function resetGame(){
   P={x:120,y:groundY-110,w:70,h:110,vy:0,onGround:true,animFrame:0,animTimer:0,alive:true,hp:3,inv:90};
   obstacles=[];newspapers=[];effects=[];
-  scrollX=0;distance=0;score=0;gameSpeed=5.5;
+  scrollX=0;distance=0;score=0;gameSpeed=6.5;
   brunoCutsceneTriggered=false;
   acmCutsceneTriggered=false;
   conesActive=false;
