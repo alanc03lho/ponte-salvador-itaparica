@@ -981,14 +981,11 @@ function drawGameOver(){
   ctx.fillText('GAME OVER',W/2,150);
 
   ctx.fillStyle='#FFF';ctx.font='bold 20px monospace';
-  ctx.fillText('A oposição venceu... por enquanto!',W/2,200);
-
-  ctx.fillStyle='#FFD700';ctx.font='bold 24px monospace';
-  ctx.fillText('Pontuação: R$ '+score,W/2,260);
+  ctx.fillText('A oposição venceu. O povo perdeu!',W/2,200);
 
   const km=(distance/WIN_DIST*12.4).toFixed(1);
   ctx.fillStyle='#87CEEB';ctx.font='18px monospace';
-  ctx.fillText('Distância: '+km+' km de 12,4 km',W/2,300);
+  ctx.fillText('Distância: '+km+' km de 12,4 km',W/2,250);
 
   if(Math.floor(gf/25)%2===0){
     ctx.fillStyle='#FFF';ctx.font='bold 18px monospace';
